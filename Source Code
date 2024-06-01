@@ -1,0 +1,135 @@
+#!/bin/bash
+DATA_FILE="expenses.txt"
+BUDGET_FILE="budgets.txt"
+PIE_CHART_FILE="pie_chart.png"
+TEMP_FILE="/tmp/message_temp.txt"
+# Function to display message using zenity
+show_message() {
+ zenity --text-info --title="Message" --filename="$TEMP_FILE" --width=400 --height=300
+}
+# Function to display menu using zenity
+display_menu() {
+ zenity --list --title="Expense Tracker Menu" --column="Choice" --column="Description" \
+ 1 "Log Expense" \
+ 2 "Set Budget" \
+ 3 "View Summary" \
+ 4 "Generate Report" \
+ 5 "Exit"
+}
+# Function to log expense
+log_expense() {
+ amount=$(zenity --entry --title="Log Expense" --text="Enter amount:")
+ date=$(zenity --entry --title="Log Expense" --text="Enter date (YYYY-MM-DD):")
+ 
+ # Validate date format
+ validate_date "$date" || return
+ description=$(zenity --entry --title="Log Expense" --text="Enter description:")
+ category=$(zenity --entry --title="Log Expense" --text="Enter category:")
+ echo "$date | $amount | $category | $description" >> "$DATA_FILE"
+ update_budget "$category" "$amount"
+ echo "Expense logged successfully." > "$TEMP_FILE"
+ show_message
+}
+# Function to update budget
+update_budget() {
+ local category="$1"
+ local amount="$2"
+ # Update budget amount in the budget file
+ awk -v category="$category" -v amount="$amount" \
+ '{if ($1 == category) $2 -= amount} {print $0}' "$BUDGET_FILE" > temp_budget
+ mv temp_budget "$BUDGET_FILE"
+}
+# Function to set budget
+set_budget() {
+ category=$(zenity --entry --title="Set Budget" --text="Enter category to set budget for:")
+ budget_amount=$(zenity --entry --title="Set Budget" --text="Enter budget amount:")
+ echo "$category | $budget_amount" >> "$BUDGET_FILE"
+ echo "Budget set successfully." > "$TEMP_FILE"
+ show_message
+}
+# Function to view summary
+view_summary() {
+ total_expenses=$(awk -F "|" '{sum += $2} END {print sum}' "$DATA_FILE")
+ echo "Total Expenses: $total_expenses"
+ # Generate pie chart
+ generate_pie_chart
+ # Display the pie chart
+ display_pie_chart
+ echo "Budgets:"
+ cat "$BUDGET_FILE" 2>/dev/null || echo "No budgets set."
+ # Additional summary features can be added based on your needs
+}
+# Function to generate pie chart
+generate_pie_chart() {
+ awk -F "|" '{print $3}' "$DATA_FILE" | sort | uniq -c | awk '{print $2, $1}' > pie_data
+ if [ -s "pie_data" ]; then
+ gnuplot <<EOF
+set term pngcairo size 600,400
+set output "$PIE_CHART_FILE"
+set title "Expense Distribution by Category"
+set style fill solid
+plot "pie_data" using 2:xtic(1) with boxes notitle
+EOF
+ else
+ echo "No data for the pie chart. Please log expenses first." > "$TEMP_FILE"
+ show_message
+ fi
+}
+# Function to display the pie chart
+display_pie_chart() {
+ if command -v xdg-open &>/dev/null; then
+ xdg-open "$PIE_CHART_FILE"
+ elif command -v open &>/dev/null; then
+ open "$PIE_CHART_FILE"
+ else
+ echo "Pie chart is saved as $PIE_CHART_FILE. Please open it manually." > 
+"$TEMP_FILE"
+ show_message
+ fi
+}
+# Function to generate report for a specific date range
+generate_report() {
+ start_date=$(zenity --entry --title="Generate Report" --text="Enter start date (YYYY-MMDD):")
+ end_date=$(zenity --entry --title="Generate Report" --text="Enter end date (YYYY-MMDD):")
+ # Validate date formats
+ if ! validate_date "$start_date" || ! validate_date "$end_date"; then
+ return
+ fi
+ awk -v start_date="$start_date" -v end_date="$end_date" -F "|" \
+ '$1 >= start_date && $1 <= end_date {print $0}' "$DATA_FILE"
+}
+# Function to validate date format
+validate_date() {
+ local date=$1
+ local formatted_date
+ # Try to format the date to check the month and day
+ formatted_date=$(date -d "$date" "+%Y-%m-%d" 2>/dev/null)
+ if [[ $? -ne 0 || $formatted_date != "$date" ]]; then
+ zenity --warning --text="Invalid date format. Please use YYYY-MM-DD."
+ return 1
+ fi
+ local year month day
+ IFS="-" read -r year month day <<< "$date"
+ # Check the number of days in the month
+ if (( month < 1 || month > 12 || day < 1 || day > $(cal "$month" "$year" | awk 'NF {DAYS = 
+$NF} END {print DAYS}') )); then
+ zenity --warning --text="Invalid date. Please enter a valid date with correct month and day 
+values."
+ return 1
+ fi
+ return 0
+}
+# Main loop
+while true; do
+ choice=$(display_menu)
+ case $choice in
+ 1) log_expense ;;
+ 2) set_budget ;;
+ 3) view_summary ;;
+ 4) generate_report ;;
+ 5) zenity --info --text="Exiting. Goodbye!"; break ;;
+ *) zenity --error --text="Invalid choice. Please try again." ;;
+ esac
+done
+# Clean up temporary file
+rm "$TEMP_FILE"
